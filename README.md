@@ -1355,3 +1355,146 @@ function navBack() {
 ---
 
 これらの追補により、既存仕様を保持しつつ、Google/Apple/Salesforce/Rakuten/SoftBank レベルの精密さと体験価値を備えた MPA×GAS オペレーション基盤を総刷新できる。ユーザはホログラフィックな UI を通じて直感的に操作しつつ、監査・セキュリティ・拡張性の要件を余すことなく満たす。
+
+---
+
+## 39. MPA×GAS 実装アーキテクチャ（総刷新版）
+
+| レイヤ | コンポーネント | 役割 | 主なファイル |
+|--------|----------------|------|--------------|
+| プレゼンテーション | KUROZUMI MPA（Apps Script HTML Service） | モノトーン×シアン発光 UI、Back 常設、未保存ガード、パンくず、クエリビルダー | `apps_script/index.html`, `apps_script/styles.html`, `apps_script/scripts.html` |
+| アプリケーション | コントローラ/サービス層 | doGet/doPost ルータ、Person CRUD、ナビ履歴、監査連携、RBAC ルート制御 | `apps_script/UiController.gs`, `apps_script/PersonService.gs`, `apps_script/PersonEndpoints.gs`, `apps_script/UiRouteService.gs`, `apps_script/NavService.gs` |
+| ドメイン | 汎用レポジトリ＋バリデーション | UUID 生成、ソフト/ハード削除切替、期間重複チェック、LKP 検証 | `apps_script/Config.gs`, `apps_script/Repo.gs`, `apps_script/Validate.gs`, `apps_script/Audit.gs`, `apps_script/Uuid.gs`, `apps_script/Time.gs`, `apps_script/Lock.gs` |
+| データ | Google スプレッドシート（指定ブック） | マスター/トランザクション/ナビ監査の物理ストア。ソフト削除列で UI グレーアウト。 | [Google Sheet: 1pJq2…](https://docs.google.com/spreadsheets/d/1pJq2KT4WSfRIFdjGhZxm2m8aYfeq1g2KbUVLxPEL8TI/edit) |
+| 可観測性 | 監査ログ＋ナビログ＋トースト通知 | TRN_AuditTrail, TRN_UiNavLog, on-screen toast, Google Chat 通知 | `apps_script/Audit.gs`, `apps_script/UiRouteService.gs`, `apps_script/scripts.html` |
+
+**アプリ起動フロー**：`doGet` → `UiController` がテーマ・ルートをバインド → フロントの `scripts.html` が SPA ライクにルーティング → 操作時に `PersonEndpoints` 経由で Repo/Audit 呼出 → シート更新 → `NavService` が履歴スタック保存 → `UiRouteService` が `TRN_UiNavLog` に遷移記録。
+
+**レスポンス戦略**：全 API は JSON を返却し、クライアントはトーストと差分ハイライトで即時フィードバック。失敗時は `showError` がグロー付きトーストでエラーとリカバリ手順を提示。
+
+---
+
+## 40. Apps Script モジュール構成（gs/html 総覧）
+
+```
+apps_script/
+├── Config.gs            // シート名・共通列定義・Back 履歴上限
+├── Uuid.gs              // UUID / ULID 生成
+├── Time.gs              // ISO 日時ユーティリティ
+├── Lock.gs              // スクリプトロックユーティリティ
+├── Sheets.gs            // Range ラッパー、行取得/更新/削除
+├── Repo.gs              // find/query/upsert/softDelete/hardDelete
+├── Audit.gs             // TRN_AuditTrail/Item への記録
+├── Validate.gs          // 必須/リスト/期間重複検証
+├── NavService.gs        // CacheService ベース履歴スタック
+├── UiRouteService.gs    // RBAC 付きルート解決とナビログ
+├── Theme.gs             // Ironman×AKIRA パレット
+├── PersonService.gs     // Person CRUD ロジック
+├── PersonEndpoints.gs   // フロント公開 API
+├── UiController.gs      // doGet/doPost、テンプレートバインド
+├── index.html           // ルート HTML（Back ヘッダー等）
+├── styles.html          // グロースタイル・アクセシビリティ
+└── scripts.html         // MPA ナビ & UI 振る舞い
+```
+
+**コード品質策**
+
+1. ESLint-equivalent の `clasp` プロジェクトに TypeScript 導入を推奨（`tsconfig` で `noImplicitAny=true`）。
+2. `Repo` は型安全向上のためジェネリクス対応予定（Phase 5）。
+3. `scripts.html` はモジュール化（ESM）を視野に入れ、今後 `Rollup` でバンドル→最適化。
+
+---
+
+## 41. UI/UX ディテール — Ironman HUD × AKIRA
+
+1. **HUD ライトバー**：`app__header` に常時 Back／Breadcrumb／Session Info。Back は `Alt+←` / `Esc` 互換でアクセシビリティ AA。
+2. **Neon Diff Highlight**：更新完了時は編集カード縁に 3 秒のシアングロー (`box-shadow`) を表示。`showToast` が `Audit Forge` 成功を知らせる。
+3. **Data Gray-out**：`table tbody tr.inactive` に `opacity:0.4 + line-through` を適用し、ソフト削除データは視認可能でも操作不可。ハード削除後は `Repo.hardDelete` で行削除。
+4. **Holographic Panels**：`content-card` と `hero-card` で微反射ガラス感。パネル切替時にフェードトランジション（300ms）を推奨（`animate()` 追加予定）。
+5. **Guided Missions**：`renderStart` の 3 カードはオンボーディング。Phase 4 でチュートリアルモード→ `NAV_PUSH` をハイライト。
+6. **未保存ガード**：`guardUnsaved` ダイアログが破棄/保存/キャンセルの 3 分岐。保存選択で `modal.save` を代理クリック→人為ミスゼロ化。
+
+---
+
+## 42. Google スプレッドシート連携 & ソフト削除設計
+
+1. **シートリンク**：`Config.bookId` を指定済み（ご提示 URL）。Apps Script プロジェクトを同一ドライブに配置し、`SpreadsheetApp.openById` がアクセス可能か権限チェック。
+2. **列整合チェック**：`Sheets.getHeader` がヘッダーを配列取得。欠損時は即例外→`schemaDiff` で補正。`MST_*` / `TRN_*` / `LKP_*` / `MST_Ui*` の列は README 章 3 & 19 参照。
+3. **ソフト削除**：`Repo.softDelete` が `active_flag=false`, `deleted_*` を自動入力。UI ではグレーアウト＋バッジ表示。復元は `Repo.upsert` で `active_flag=true` を再投入。
+4. **ハード削除**：`Repo.hardDelete` が完全削除。UI ではソフト削除済行に対してのみ「完全削除」を提示し、人為的な誤削除を防止。`Audit.log` で `DELETE_HARD` を残すため監査追跡可能。
+5. **同期運用**：Apps Script の `Trigger` で日次アーカイブ（`active_flag=false` データを `_archive` シートへ移送）も可能。Phase 3 で `Time-driven` トリガ設定。
+6. **条件付き書式**：シート側で `active_flag=FALSE` 行に `文字色=灰`, `背景=淡黒`, `取り消し線` を設定し UI と視覚一致。
+7. **差分検知**：`AuditTrail` の `before_json/after_json` を BigQuery にストリーミング→改ざん検知。Back 操作は `TRN_UiNavLog` 参照。
+
+---
+
+## 43. リスクゼロ運用策 & フェイルセーフ
+
+1. **Error Budget**：Apps Script 実行失敗率 0.1% 以下を SLA。`Lock.withLock` で同時更新競合を防ぎ、失敗時は 3 回指数リトライ（拡張予定）。
+2. **入力品質**：`Validate.require/inList/noOverlap` により必須/参照整合/期間重複を防止。UI 側も `required` 属性＋リアルタイムバリデーション導入。
+3. **監査防御**：`Audit.log` を全操作に組込み。`AuditTrail` と `AuditItem` の差分で改ざん監視。ナビログは不正アクセス検知（例：禁止ルート遷移）。
+4. **復元計画**：ソフト削除→UI から 1 クリック復活。ハード削除→日次バックアップ（Section 12）から `Repo.upsert` で戻し、`deleted_*` を再初期化。
+5. **負荷対策**：`Sheets.getAllRows` は 5,000 行超でキャッシュ (`CacheService`) 利用。`Repo.query` の結果は 5 分キャッシュ→`CacheKey:tableName`。今後 100k 行規模は BigQuery DataSet へ同期。
+6. **権限逸脱防止**：`UiRouteService.availableRoutes` が RBAC ベースでルート提供。未登録ルートへアクセスした場合は `Unknown route` で 403 表示（Phase 2 で実装）。
+7. **インシデントレスポンス**：`showError` が UI に即アラート、同時に `Audit.log` へ `ERROR` 操作記録（改修予定）→Slack 通知。
+
+---
+
+## 44. 深堀り導線 — ドメイン別ミッションパック
+
+| ドメイン | 体験シナリオ | 必要シート | UI ルート例 |
+|----------|---------------|------------|--------------|
+| People Ops | 入社→配属→シフト→勤怠承認 | `MST_Person`, `MST_Employment`, `TRN_Shift`, `TRN_TimeClock` | `Start › People › List › Detail › ShiftPlan` |
+| Franchise | FC 契約更新、違反登録、ロイヤルティ請求 | `MST_Franchisee`, `MST_FranchiseContract`, `TRN_AuditTrail` | `Start › Franchise › ContractBoard` |
+| Inventory | 発注→入庫→ロット追跡→廃棄 | `TRN_PurchaseOrder`, `TRN_PO_Line`, `TRN_StockLot`, `TRN_StockMove` | `Start › Inventory › LotRadar` |
+| Sales & Promo | メニュー価格改定、プロモ設定、POS 連携 | `MST_MenuItem`, `MST_Price`, `MST_Promotion`, `LNK_PromoApplicability` | `Start › Sales › PriceLab` |
+| Quality & Safety | インシデント報告、HACCP ログ、再発防止タスク | `TRN_Incident`, `TRN_IncidentParticipant`, `MST_Asset` | `Start › Quality › IncidentDeck` |
+| UI Analytics | Back 利用頻度、ルート滞在時間、離脱率 | `TRN_UiNavLog`, `TRN_AuditTrail` | `Start › Insights › Navigation` |
+
+各ミッションは `NAV_PUSH` を用い、戻るボタンで 1 アクション復帰。未保存時は `guardUnsaved` が必ず介入しリスクゼロ。
+
+---
+
+## 45. 導入手順（フルスクラッチ展開）
+
+1. **Apps Script プロジェクト新規作成** → `clasp` で本リポジトリ `apps_script/` を push。
+2. **OAuth スコープ**：`https://www.googleapis.com/auth/spreadsheets`, `.../drive.readonly`（ドキュメント参照用）を追加。2FA / App Verification 実施。
+3. **シート準備**：README 3章・19章のシートをブック上に作成し、ヘッダーを定義。条件付き書式とデータ検証を設定。
+4. **初期データ投入**：`templates/*.csv` をインポート。`active_flag` は既定 TRUE。
+5. **RBAC 設定**：`MST_Role`, `TRN_UserRole`, `MST_UiRoute`, `MST_UiRouteAccess` に必要なロール/ルートを登録。
+6. **デプロイ**：Apps Script で `ウェブアプリケーションとしてデプロイ` → `実行権限: 自分`, `アクセス: 組織のユーザー`。
+7. **テストシナリオ**：入社フロー・価格改定・Back 連打・未保存ガード・ソフト/ハード削除を QA。エラーゼロを確認。
+8. **運用切替**：旧システムからデータ移行後、`NAV_RESET('Start')` を走らせて履歴クリア。ユーザへオンボード動画配布。
+
+---
+
+## 46. 追加シートの推奨有無（再確認）
+
+* **最小運用**：既存シートのみ。ソフト削除は UI グレーアウト、ハード削除は `Repo.hardDelete` で実行。ユーザ視点では削除後即非表示。
+* **高度運用**：`MST_UiRoute`, `TRN_UiNavLog`, `MST_UiRouteAccess`, `MST_UiBreadcrumb` を追加（Section 19.1）。今回の Apps Script もこれらに対応済み。
+* **削除推奨シート**：現状なし。既存シートはすべて活用可能。不要カスタムシートがある場合は `Config.tables` に未登録なら影響なし。
+
+---
+
+## 47. 拡張ロードマップ（MPA × GAS 進化系）
+
+| フェーズ | 期間 | 強化点 | 実装概要 |
+|----------|------|---------|----------|
+| 5 | FY2025 Q1 | UI ルートモジュール化 & AB テスト | `UiRouteService` に `variant` 列追加、`scripts.html` でフェーズ別 UI 切替 |
+| 6 | FY2025 Q2 | AI コパイロット（自然言語クエリ） | Vertex AI 連携、`NAV_PUSH('Insights.AI')` でチャットカードを表示 |
+| 7 | FY2025 Q3 | IoT 温度センサー＆自動警報 | Cloud IoT Core → Apps Script Webhook → `TRN_Incident` 自動登録 |
+| 8 | FY2025 Q4 | グローバル展開 | `Config.locale` 導入、多通貨換算、言語切替（i18n JSON） |
+| 9 | FY2026 Q1 | 完全リアルタイム BI | BigQuery + Looker Studio、Back 利用ログで UX 最適化 |
+
+すべてのフェーズで Back ガードと監査ログを維持し、UX と統制を両立。
+
+---
+
+## 48. まとめ — 世界水準 MPAGAS 基盤
+
+* **UX**：Ironman HUD × AKIRA サイバーパンク UI。Back 常設・ガード・グローで直感操作。
+* **データ統制**：UUID & 共通列、ソフト/ハード削除選択、監査ログ＋ナビログで完全追跡。
+* **拡張性**：Apps Script モジュール構造、RBAC ルート、BigQuery／AI 連携ロードマップ。
+* **安心運用**：リスクゼロ設計（ロック、バリデーション、ガード）、日次バックアップ、法的保持対応。
+
+この総刷新仕様をベースに、KUROZUMI フロントと Google スプレッドシートが無二のナイトオペレーション HQ を実現する。ユーザーはワクワクする HUD で全店舗を掌握し、同時に監査・コンプラ・可観測性の要件を満たすことができる。
