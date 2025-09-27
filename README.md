@@ -991,3 +991,326 @@ flowchart LR
 * **拡張構成**：ナビを可視化/制御/KPI化したい場合のみ、`MST_UiRoute / MST_UiRouteAccess / MST_UiBreadcrumb / TRN_UiNavLog` を**追加**。
 
 > 指定URLのブックは**Master DB**として前提化済み。各CRUDはGAS経由でこのブックに反映し、UIの削除は**ソフト削除（推奨）**または**グレーアウト**で表現します。
+
+---
+
+## 27. README追補（GitHub 反映用：Diagramsセクション）
+
+以下をREADMEの `## Diagrams` として追加すると、Mermaidをそのままレンダリング可能（GitHubはMermaid対応）。
+
+```md
+## Diagrams
+- System Flow (MPA×GAS×Sheets as Master DB)
+- Functional Map (Domain Dependencies)
+- Key Sequences (Create/Price Update/Soft Delete/Back)
+- DFD Level 1 (POS×Inventory×Finance)
+- ER (Core & UI‑Navigation Extension)
+
+> 図は `/docs/er/` に `.md` として分割保存。Mermaid記法。
+```
+
+---
+
+## 28. スプレッドシートへの影響（最終確認）
+
+* **最小構成**：**追加不要**（既存のMST/TRN/LKP/LNK＋監査で十分）。
+* **拡張構成**：ナビを可視化/制御/KPI化したい場合のみ、`MST_UiRoute / MST_UiRouteAccess / MST_UiBreadcrumb / TRN_UiNavLog` を**追加**。
+
+> 指定URLのブックは**Master DB**として前提化済み。各CRUDはGAS経由でこのブックに反映し、UIの削除は**ソフト削除（推奨）**または**グレーアウト**で表現します。
+
+---
+
+## 29. Google スプレッドシート統合手順（指定ブック連携）
+
+**対象ブック**：`https://docs.google.com/spreadsheets/d/1pJq2KT4WSfRIFdjGhZxm2m8aYfeq1g2KbUVLxPEL8TI/edit#gid=1926398647`
+
+### 29.1 マスターブックの役割定義
+
+1. **単一ソース・オブ・トゥルース**：当該ブックは全MST/TRN/LKP/LNK表の一次保存先。Apps Script（GAS）からのみ書き込み、ユーザは基本閲覧＋承認用途。
+2. **命名統一**：既存シートが仕様と異なる場合は `MST_* / TRN_* / LKP_* / LNK_*` プレフィックスへ統一。旧名称はアーカイブシートへ退避し、UUID列の移行マッピングを保持。
+3. **保護と権限**：`MST_Person` 等の機微シートは閲覧権限をロールベースで制御（ビューア/コメントのみ）。GASサービスアカウントが編集権限を保持。
+
+### 29.2 シートチェックリスト（追加・削除判定）
+
+| 判定 | 条件 | アクション |
+|------|------|------------|
+| **Keep** | 仕様内の `MST/TRN/LKP/LNK` 名称と完全一致 | カラム構造が最新仕様と一致するか検証。欠損列は追記。余計な列はアーカイブ列へ移設し、`_deprecated` サフィックスで非表示。 |
+| **Add** | 仕様にあるがブックに存在しないシート | Apps Script マイグレーションスクリプトで自動作成（ヘッダー＋共通列）。初期データは CSV テンプレートから `setValues` でバルクロード。 |
+| **Archive** | 仕様外の legacy シート | `ARCHIVE_yyyyMMdd_*` 名でバックアップ後、閲覧専用タブへ移動。アプリからは参照しない。 |
+| **Delete（要承認）** | 内容が空、監査済みで不要 | HQ 管理者承認のもと削除。AuditTrail に `operation=DELETE_HARD` を記録。 |
+
+### 29.3 行単位の削除ポリシー（UI連携）
+
+* **ソフト削除標準**：ユーザが UI 上で削除操作を行うと `active_flag=FALSE`・`deleted_at/by` が更新され、即座に UI からは非表示（フィルタで除外）。スプレッドシート上では条件付き書式でグレーアウト＋取り消し線。
+* **ハード削除例外**：法的要件等で物理削除が必要な場合、`Repo.hardDelete()` を用意。Apps Script 実行時に管理者 2FA と `TRN_AuditTrail` へ `operation=DELETE_HARD` を強制記録。ブック側では `Revision History` をダンプし監査証跡を保持。
+* **復元フロー**：UI の「復元」アクションで `active_flag=TRUE`・`deleted_*` を null 化。履歴スタックが自動で詳細画面へ戻り、復元後の差分をハイライト。
+
+### 29.4 GAS 連携ポイント
+
+1. **スプレッドシート ID 定義**：`Config.SS_MASTER_ID = '1pJq2KT4WSfRIFdjGhZxm2m8aYfeq1g2KbUVLxPEL8TI'`
+2. **シートハンドラ**：`Sheets.getSheet(name)` で遅延取得。存在しなければ `Sheets.ensureSheet(name, headers)` で作成。
+3. **トランザクション保証**：`LockService` を利用し、同一シート同時更新時に排他制御。ポリシー：最大 5 回リトライ、バックオフ 500ms。
+4. **シートバージョニング**：スキーマ変更時は `Config.SCHEMA_VERSION` を更新し、初回アクセス時にマイグレーションスクリプトを自動適用（不足列追加、データ型整形）。
+
+### 29.5 条件付き書式テンプレート
+
+| シナリオ | 範囲 | 式 | 書式 |
+|----------|------|----|------|
+| ソフト削除行 | `A:Z` | `=$active_flag=FALSE` | 灰色背景（#1C1C1C）、文字色#666、取り消し線 |
+| 期限切れ | `start_on:end_on` | `=TODAY()>$end_on` | 背景#330000、文字色#FF5555 |
+| 期限警告 | `start_on:end_on` | `=AND($end_on-TODAY()<=7,$end_on>=TODAY())` | 背景#332200、文字色#FFDD55 |
+| 高リスクインシデント | `severity` | `=$severity="CRITICAL"` | 背景#1A0000、左端に赤色グロー |
+
+---
+
+## 30. Apps Script 実装詳細（フルスクラッチ版）
+
+### 30.1 プロジェクト構成
+
+```
+/src
+  /config
+    config.ts           // Spreadsheet ID、シート名、LKP キャッシュ TTL
+  /lib
+    uuid.ts             // UUID/ULID 生成（`Utilities.getUuid()` ラッパ）
+    time.ts             // `now()`, `today()`, `formatIso()`
+    sheets.ts           // `getRows`, `append`, `batchUpdate`
+    lock.ts             // `withLock(key, fn)`
+    cache.ts            // `getOrLoad(cacheKey, loader, ttl)`
+  /repo
+    baseRepo.ts         // `findById`, `query`, `upsert`, `softDelete`, `hardDelete`
+    personRepo.ts
+    employmentRepo.ts
+    ...
+  /service
+    personService.ts    // ビジネスロジック＋バリデーション
+    storeService.ts
+    pricingService.ts
+    navService.ts
+  /validation
+    rules.ts            // `require`, `inList`, `noOverlap`, `uniqueCombo`
+  /audit
+    audit.ts            // `log(user, entity, op, before, after)`
+  /ui
+    router.ts           // `doGet` ルータ
+    controller.ts       // `doPost` ハンドラ
+    history.ts          // Back スタック管理
+  appsscript.json
+```
+
+### 30.2 Repository パターン詳細
+
+* **`upsert(entity, payload, user)`**：
+  1. `LockService` で対象シートの行ロック。
+  2. `findById` で既存行取得。存在すれば diff を取り `before_json/after_json` を生成。
+  3. `Sheets.batchUpdate` で一括更新。共通列（`updated_*`）は自動付与。
+  4. `Audit.log` を呼び出し、`operation` は `CREATE` または `UPDATE` を判定。
+
+* **`query(filter)`**：LKP 参照結果を `CacheService` に保持し、高頻度読み取りを高速化。フィルタ DSL（`field op value`）をパースし、行列参照で検索。
+
+### 30.3 Validation ルールの深掘り
+
+| ルール | 説明 | 実装メモ |
+|--------|------|----------|
+| `uniqueCombo(fields)` | 氏名＋生年月日など複合ユニーク制約 | `Repo.query` で該当フィールドの一致行を取得し、`active_flag=TRUE` のみ対象。 |
+| `dateRange()` | `start_on <= end_on` の保証 | 入力フォーマットを ISO8601 に整形し、数値比較。 |
+| `noOverlap(entityId, start, end)` | 期間重複防止 | `FILTER` クエリで重複レコードを抽出し、ヒット時は UI に警告＋既存期間を表示。 |
+| `lkp(value, code)` | 参照整合性 | `CacheService` で LKP テーブルを30分キャッシュ。ミス時は候補リストを提示。 |
+
+### 30.4 API エンドポイント
+
+| Route | Method | 概要 |
+|-------|--------|------|
+| `/api/person.create` | POST | Person 登録。重複検知と雇用自動ひも付け。 |
+| `/api/person.update` | POST | 差分更新、変更点ハイライト返却。 |
+| `/api/entity.softDelete` | POST | 汎用ソフト削除。`entity` と `id` を受け取り、トランザクション化。 |
+| `/api/entity.restore` | POST | 復元。 |
+| `/api/nav.push` | POST | 画面遷移ログ＋履歴スタック更新。 |
+| `/api/report.kpi` | GET | KPI 集計を返却。BigQuery 連携時はキャッシュ層経由。 |
+
+### 30.5 自動テスト（Clasp＋Jest）
+
+* GAS プロジェクトを `clasp` でローカル同期。
+* `gas-local`（仮想 `SpreadsheetApp`）でユニットテスト。
+* 主なテストケース：
+  * `personService.create`：同一組み合わせ登録時に重複エラーを返却。
+  * `pricingService.upsert`：期間重複時にエラーコード `PRICE_RANGE_OVERLAP`。
+  * `repo.softDelete`：`active_flag` 更新と `Audit.log` 呼び出し確認。
+
+---
+
+## 31. UI/UX ディープダイブ（Ironman × AKIRA）
+
+### 31.1 デザインシステム
+
+| 要素 | 指定 |
+|------|------|
+| ベースカラー | 背景#050505、パネル#101015、アクセントグロー#00F6FF（10%）、サブアクセント#FF2667 |
+| タイポ | 見出し `Orbitron`, 本文 `Roboto Mono`、日本語本文 `M PLUS 1p` |
+| アイコン | 角度 15° 傾斜のホログラフィック調アイコン。SVG シンボル＋CSS グロー。 |
+| モーション | `transition: 260ms cubic-bezier(0.19, 1, 0.22, 1)`（Easing Out Back）。保存時は 600ms の発光アニメ。 |
+
+### 31.2 レイアウト
+
+1. **Start ハブ**：カードグリッド（3列）。各カードはドロップシャドウと発光ボーダー。カードホバーで背景にアニメーションパーティクル。
+2. **カテゴリナビ**：左側に磁気ドロワー。ロールに応じて表示順序を `UI_ROUTE_ACCESS` から取得し、アクセス可能ルートのみ表示。
+3. **一覧ビュー**：
+   * ヘッダにクエリビルダー。タグ型 UI で `prefecture:大阪` 等をトークン表示。
+   * 表は固定ヘッダ＋横スクロール。差分表示は背景グラデーション（青→マゼンタ）。
+   * ソフト削除行は自動で `opacity: 0.45` + `text-decoration: line-through`。
+4. **詳細ビュー**：
+   * 右側ドロワーに関連情報（監査ログ、関連ドキュメント）。
+   * タイムラインモジュールで配属履歴や契約期間を可視化。
+5. **編集モーダル**：
+   * 入力項目は 2 カラムフォーム。必須項目はシアン発光の下線。バリデーションエラー時は赤い発光と振動アニメーション。
+
+### 31.3 戻るナビ（Back）の UX 強化
+
+* **固定ヘッダー**：常時左上にホログラム風の `Back` ボタン。フォーカス時はリングが 2 回波紋。
+* **ショートカット**：`Alt+←` で `NAV_BACK()`、`Esc` でモーダル閉鎖。アクセシビリティガイドラインに沿った `aria-label` を付与。
+* **未保存ダイアログ**：3 ボタン（破棄/保存/キャンセル）。保存ボタンはアニメーションで脈動。
+
+### 31.4 カスタマイズ性
+
+* ルック&フィールは `theme.json` で定義。将来的な A/B テストや季節キャンペーンに対応。
+* `UI_ROUTE` に `is_modal`, `keep_state` を格納し、画面遷移時に UI が自動で状態を保存/復元。
+
+---
+
+## 32. オブザーバビリティ＆KPI 拡張
+
+### 32.1 ログ & メトリクス
+
+* **ログ集約**：`TRN_AuditTrail`（業務）と `TRN_UiNavLog`（UI）を BigQuery に ETL。スケジュールトリガーで日次同期。
+* **メトリクス**：
+  * CRUD 件数、ソフト削除率、復元率。
+  * Back ボタン利用率（UX 改善指標）。
+  * プロモ反応率、在庫廃棄ロス率。
+* **トレース**：Apps Script の `Execution Transcript` を Stackdriver（現 Cloud Logging）へ転送し、失敗アクションを Slack 通知。
+
+### 32.2 ダッシュボード（Looker Studio）
+
+| ページ | ウィジェット | データソース |
+|--------|---------------|---------------|
+| HQ Overview | 売上トレンド、原価率、労務比率、重大インシデント件数 | BigQuery + LKP |
+| FC Performance | 店舗別ロイヤルティ、契約期限カレンダー、FC 健全度スコア | `MST_Franchisee`, `TRN_SalesReceipt`, `TRN_Incident` |
+| Workforce | 勤怠遵守率、研修受講ステータス、評価分布 | `TRN_TimeClock`, `TRAINING_HISTORY`, `EVALUATION` |
+| Ops Health | 設備チケット SLA、衛生チェック逸脱、Back 利用ログ | `TRN_MaintTicket`, `TRN_UiNavLog` |
+
+---
+
+## 33. セキュリティ・コンプライアンス強化策
+
+1. **データ分類**：PII、営業機密、公開情報の 3 区分でラベリングし、シート保護レベルを定義。
+2. **アクセス監査**：月次で `TRN_AuditTrail` を自動集計し、権限変更・削除操作のレビュー会を開催。
+3. **暗号化**：銀行口座等は別ブックにハッシュ化（SHA-256＋ソルト）して保存。参照時のみ復号キーを用いた連携。
+4. **リーガルホールド**：訴訟や監査発生時は `Repo.softDelete` を一時ロックし、ハード削除を禁止。`Config.legalHold=true` で制御。
+5. **DLP**：Google Workspace DLP ルールで外部共有禁止。Apps Script からのメール送信時も機密ラベルを強制。
+
+---
+
+## 34. デプロイ & リリースプロセス
+
+### 34.1 CI/CD
+
+1. GitHub Actions で `clasp push --watch` を禁止（手動確認必須）。
+2. Pull Request で `npm test`（ユニット）＋ `npm run lint` を実行。Mermaid 検証は `mmdc` で画像生成テスト。
+3. ステージングブック（`*_stg`）へ自動デプロイし、承認後に本番ブックへ手動デプロイ。
+
+### 34.2 リリースチェックリスト
+
+* スキーマ差分（`schemaDiff` スクリプト）を `docs/release-notes/` に保存。
+* UI スナップショット（Back ボタン含む）を `docs/screenshots/` に格納。
+* ハード削除操作ログをレビューし、不要データが確実に削除されたことを確認。
+
+---
+
+## 35. 品質保証（QA）戦略
+
+1. **テストピラミッド**：ユニット（70%）→インテグレーション（20%）→UAT（10%）。
+2. **シナリオテスト**：
+   * 店舗オープンフロー：Store→Contract→Asset→Price→Inventory→POS。
+   * 退職処理：Employment 終了→User 無効→Group 脱退→Back で一覧へ戻る。
+3. **パフォーマンステスト**：Apps Script のバッチ更新 5,000 行を 1 分以内で完了することを SLA に設定。
+
+---
+
+## 36. 運用・トレーニング・チェンジマネジメント
+
+1. **ロール別トレーニング**：HQ 管理・エリアマネ・店長・スタッフの 4 コース。インタラクティブチュートリアルで Back 操作とソフト削除復元を練習。
+2. **ナレッジベース**：`docs/playbooks/` にプレイブックを格納。例：「深夜営業許可更新」「インシデント一次対応」。
+3. **コミュニケーション**：変更は Weekly リリースノート＋Slack ブロードキャスト。UI 変更時は 24 時間前にツールチップで告知。
+4. **サポート SLA**：
+   * 重大：4 時間内初動。
+   * 高：1 営業日。
+   * 中：3 営業日。
+   * 低：1 週間。
+
+---
+
+## 37. ロードマップ（Future Enhancements）
+
+| フェーズ | 期間 | 強化点 |
+|----------|------|---------|
+| 5 | FY2025 Q1 | HR 採用ワークフロー（応募～内定）＋Web フォーム連携 |
+| 6 | FY2025 Q2 | IoT 温度センサー連携、リアルタイム在庫監視 |
+| 7 | FY2025 Q3 | 生成 AI による日報要約・異常検知アラート |
+| 8 | FY2025 Q4 | グローバル展開（多通貨対応、言語切替、リージョン別税制） |
+
+---
+
+## 38. 付録：テンプレート & スクリプトサンプル
+
+### 38.1 CSV テンプレート
+
+* `templates/mst_person.csv`
+* `templates/trn_sales_receipt_YYYYMM.csv`
+* `templates/mst_ui_route.csv`
+
+### 38.2 Apps Script サンプル（Soft Delete）
+
+```ts
+function softDeleteEntity(entity, id, userId) {
+  return Lock.withLock(entity, () => {
+    const repo = RepoFactory.for(entity);
+    const before = repo.findById(id);
+    if (!before) {
+      throw new Error(`${entity}#${id} not found`);
+    }
+    repo.update(id, {
+      active_flag: false,
+      deleted_at: Time.nowIso(),
+      deleted_by: userId,
+    });
+    Audit.log(userId, entity, id, 'DELETE_SOFT', before, {
+      ...before,
+      active_flag: false,
+    });
+    return { id, status: 'SOFT_DELETED' };
+  });
+}
+```
+
+### 38.3 UI 履歴スタック擬似コード
+
+```ts
+const historyStack = [];
+
+function navPush(route, params) {
+  historyStack.push({ route, params, state: captureState() });
+}
+
+function navBack() {
+  if (historyStack.length <= 1) {
+    return navReset('Start');
+  }
+  historyStack.pop();
+  const { route, params, state } = historyStack[historyStack.length - 1];
+  restoreState(state);
+  render(route, params);
+}
+```
+
+---
+
+これらの追補により、既存仕様を保持しつつ、Google/Apple/Salesforce/Rakuten/SoftBank レベルの精密さと体験価値を備えた MPA×GAS オペレーション基盤を総刷新できる。ユーザはホログラフィックな UI を通じて直感的に操作しつつ、監査・セキュリティ・拡張性の要件を余すことなく満たす。
