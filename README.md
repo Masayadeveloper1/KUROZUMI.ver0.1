@@ -1,48 +1,42 @@
 # KUROZUMI.ver0.1
-https://docs.google.com/spreadsheets/d/1pJq2KT4WSfRIFdjGhZxm2m8aYfeq1g2KbUVLxPEL8TI/edit?gid=1804339974#gid=1804339974の内容をMPAでのアプリ化
-# KUROZUMI ver.0.1 — README
-
-> **GAS × Google スプレッドシートの業務管理 MPA**
-> 目標：白画面（ホワイトアウト）や画面遷移不具合を根絶し、DB（指定スプレッドシート）と堅牢に連携。
-> UIは**AKIRA系モノトーン・メタリックのサイバーパンク**、日本語主体・かんたんな英語表記併記、ChatGPTサポート内蔵。
-
----
-
-## 1. ゴール / できること（Features）
-
-### ✅ v0.1 ハイライト
-
-* Apps Script 側で `SpreadsheetRepository.ensureSchema()` を呼び出し、初期アクセス時に指定シート（Stores / Staff / Customers / Sales / Payments / Production / Meta_Lookups / Logs）を自動生成します。
-* `index.html` は MPA 方式で `?page=sales` などのクエリを解釈し、`ALLOWED_PAGES` ホワイトリスト外は `start` にフォールバック。ホワイトアウトを防ぐため `safeError.html` でフェイルセーフ描画します。
-* 画面内フォームは `data-handler` 属性で Apps Script の同名関数にルーティングされ、`components/managementPage.html` が送信/失敗ハンドリングを一元化。
-* Google スプレッドシートを唯一の DB とし、`Utils.withLock`（DocumentLock）で多重送信を抑止。操作ログは `logger.gs` が `Logs` シートに追記します。
-* ChatGPT サポートは `gpt.gs` の `askAssistant` から OpenAI API を呼出し、API キー未設定時はユーザーに日本語で案内。
-* UI はモノトーン×ネオンサイバーパンク調テーマ（`style.html`）を適用。浮遊するサポートウィンドウとメニュー遷移はホワイトアウトしない設計です。
-
----
-
-* **マルチページ型（MPA）**：`start → menu → 各管理ページ（売上/顧客/店舗/生産/支払い/スタッフ/…）`
-* **フォームビルド**：メタ定義からフォーム生成（必須/型/選択肢/検証）
-* **テーブルビルド**：列定義から一覧生成（検索/ソート/ページング/CSV出力）
-* **DB**：指定スプレッドシートを**唯一のデータソース**としてCRUD（create/read/update/delete）
-* **ChatGPTアシスト**：ページ右下のヘルプから操作説明/項目の意味/入力補完を提示
-* **防御と保守**：
-
-  * 書き込み時の**LockService**（重複送信/多重更新対策）
-  * **入力検証・サニタイズ**（XSS/不正文字）
-  * **エラー境界**：ユーザー画面は決して真っ白にしない（再試行/デグレードUI）
-  * **監査ログ**（操作/例外/API呼出）
-  * **環境切替**（DEV/PROD）
-* **UI**：モノトーン基調＋メタリック、動作軽量、ダーク/ハイコントラスト、JP/EN最小語併記
-
----
-
-## 2. リポジトリ構成（Project Structure）
-
+Google Apps Script × Google スプレッドシートで構築する業務管理 MPA（Multi Page Application）の実装です。AppConfig の初期化順序問題を解消し、初期アクセス時にスキーマ整備と防御的な UI フローを実現しています。
+## 主な特徴
+- **AppConfig の早期初期化**：`00_config.gs` を最優先でロードし、`main.gs` から参照される前に設定を確実に利用可能にします。
+- **スキーマ自己修復**：`SpreadsheetRepository.ensureSchema()` が Stores / Staff / Customers / Sales / Payments / Production / Meta_Lookups / Logs シートを自動生成し、不要なシートを削除します。
+- **マルチページ UI**：`index.html` が `?page=` クエリを解釈し、ホワイトアウト時には `safeError.html` で保護表示します。
+- **操作ログ**：`AppLogger` が Stackdriver と Logs シートに二重出力し、監査トレイルを保持します。
+- **ChatGPT サポート**：OpenAI API キー未設定時は丁寧な日本語メッセージで案内し、設定済みなら `askAssistant` が回答を返します。
+## ディレクトリ構成
 ```
-/components/
-  formBuilder.html          # 動的フォームUI（検証/バリデーション/送信）
-  gpt-assistant.html        # 画面右下のChatGPTヘルプUI
-  managementPage.html       # 管理ページ用共通レイアウト（カード/タブ/通知）
-  tableBuilder.html         # 動的テーブルUI（検索/ソート/ページング）
-  ui.html                   # 💡（注意）ui.hhtml → ui.html に統一推奨
+apps-script/
+  00_config.gs            # AppConfig。Script Properties から設定を読み込み
+  01_utils.gs             # LockService ラッパー、サニタイズ、include ヘルパー
+  02_repository.gs        # スプレッドシート CRUD、スキーマ保証と不要シート削除
+  03_logger.gs            # Logs シート / Stackdriver へ出力
+  04_services.gs          # エンティティ作成・一覧・CSV エクスポート
+  05_gpt.gs               # ChatGPT 連携（OpenAI API）
+  06_api.gs               # フロントエンド公開関数
+  10_main.gs              # doGet エントリーポイント
+  appsscript.json         # マニフェスト
+  index.html              # メイン MPA テンプレート
+  safeError.html          # フェイルセーフ表示
+  style.html              # AKIRA 系モノトーン × ネオンスタイル
+  scripts.html            # 画面制御 JS（フォーム・テーブル・アシスタント）
+  components/
+    formBuilder.html      # 汎用フォームテンプレート
+    tableBuilder.html     # テーブルテンプレート
+    managementPage.html   # 管理画面コンテナ
+    ui.html               # 概要セクション
+    gpt-assistant.html    # 右下 AI サポート
+```
+## 初期セットアップ
+1. Apps Script のスクリプトプロパティに以下を設定します。
+   - `SPREADSHEET_ID`: 参照するスプレッドシート ID
+   - `ENV`: `DEV` または `PROD`
+   - `OPENAI_API_KEY`: （任意）ChatGPT 連携を有効化する場合
+2. ウェブアプリとしてデプロイし、「アクセス権：誰でも」「実行権限：自分」を選択します。
+3. 初回アクセス時にスキーマ整備と不要シート削除が実行されます。
+## 運用 Tips
+- 追加で必要なシートがある場合は `SpreadsheetRepository.schema` に列定義を追記してください。
+- スクリプトのタイムアウトを避けるため、極端に大きなデータセットではフィルタリングやページネーションの導入を検討してください。
+- OpenAI API 呼び出しに失敗した場合は Logs シートにエントリが残ります。
